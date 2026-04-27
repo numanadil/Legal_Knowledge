@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "VLANC Legal Plugin",
+  "version": "1.0",
+  "description": "Click the icon to show the relatedLegal Acts related to the highlighted text.",
+  "permissions": ["scripting", "activeTab"],
+  "web_accessible_resources": [{
+                              "resources": ["libs/marked.min.js","libs/html2pdf.bundle.min.js"],
+                              "matches": ["<all_urls>"]
+                              }],
+  "action": {
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

@@ -1,0 +1,198 @@
+import os
+import json
+from ..EVR import *
+from ..utils import *
+from ..states import *
+from ..prompts import *
+from ..ai_model import *
+from langsmith import traceable
+from langgraph.types import Send
+from ..configuration import Configuration
+from langchain_core.runnables import RunnableConfig
+import re
+from langchain_community.chat_models import ChatOllama
+
+
+class Websearch_Agent:
+    def __init__(self):
+        self.Get_API=Get_API_Keys()
+        self.model_2=Ai_Models_WebSearch()
+    
+    @traceable(name="generate_query")
+    def generate_query(self,state: OverallAgentsState_Web_Search, config: RunnableConfig) -> QueryGenerationState:
+        configurable = Configuration.from_runnable_config(config)
+
+        if state.get("initial_search_query_count") is None:
+            state["initial_search_query_count"] = configurable.number_of_initial_queries
+        
+        
+        json_instructions = """
+        You must ONLY respond with a valid JSON object.
+        The JSON must match this schema exactly:
+        {
+            "query": ["string", "string", ...],
+            "rationale": "string"
+        }
+        No markdown, no extra text.
+        """
+
+        current_date = get_current_date()
+        formatted_prompt = (
+            query_writer_instructions.format(
+                current_date=current_date,
+                research_topic=get_research_topic(state["messages"]),
+                number_queries=state["initial_search_query_count"],
+            )
+            + "\n\n"
+            + json_instructions
+        )
+
+        # llm = ChatOllama(model="llama3", temperature=0.7)
+
+
+        
+        llm = ChatOllama(model="llama3", temperature=0.7)
+        response: SearchQueryList = llm.invoke(formatted_prompt)
+        response_dict = json.loads(response.content)     # now it's a dict
+
+        # print(response_dict["query"])
+        #response_dict["query"
+        #result=self.model_2.get_generate_querry_model(configurable.query_generator_model,formatted_prompt,state)
+
+        
+        return {"search_query": response_dict["query"],"event":"Generating Querry..."}
+    
+    @traceable(name="continue_to_web_research")
+    def continue_to_web_research(self,state: QueryGenerationState):
+        return [
+                Send("web_research", {"search_query": search_query, "id": int(idx)})
+                for idx, search_query in enumerate(state["search_query"])
+                ]
+        
+    @traceable(name="web_research")
+    def web_research(self,state: WebSearchState, config: RunnableConfig) -> OverallAgentsState_Web_Search:
+        configurable = Configuration.from_runnable_config(config)
+        
+        formatted_prompt = web_searcher_instructions.format(
+                                                            current_date=get_current_date(),
+                                                            research_topic=state["search_query"],
+                                                            )
+
+        
+        response=self.model_2.get_generate_websearch_model(configurable.query_generator_model,formatted_prompt)
+        resolved_urls = resolve_urls(
+                                    response.candidates[0].grounding_metadata.grounding_chunks, state["id"]
+                                    )
+        citations = get_citations(response, resolved_urls)
+        modified_text = insert_citation_markers(response.text, citations)
+        sources_gathered = [item for citation in citations for item in citation["segments"]]
+
+        return {
+                "sources_gathered": sources_gathered,
+                "search_query": [state["search_query"]],
+                "web_research_result": [modified_text]
+                }
+        
+    @traceable(name="knowledge_reflexion")
+    def reflection(self,state: OverallAgentsState_Web_Search, config: RunnableConfig) -> ReflectionState:
+        configurable = Configuration.from_runnable_config(config)
+        state["research_loop_count"] = state.get("research_loop_count", 0) + 1
+        
+        reasoning_model = state.get("reasoning_model", configurable.reflection_model)
+        current_date = get_current_date()
+        # json_instructions = """
+        # You must ONLY respond with a valid JSON object.
+        # The JSON must match this schema exactly :
+        # {{
+        #     "is_sufficient": true, // or false
+        #     "knowledge_gap": "The summary lacks information about performance metrics and benchmarks", // "" if is_sufficient is true
+        #     "follow_up_queries": ["What are typical performance benchmarks and metrics used to evaluate [specific technology]?"] // [] if is_sufficient is true
+        # }}
+        # No markdown, no extra text.
+        # """
+
+        # formatted_prompt = (reflection_instructions.format(
+        #                                                 current_date=current_date,
+        #                                                 research_topic=get_research_topic(state["messages"]),
+        #                                                 summaries="\n\n---\n\n".join(state["web_research_result"]),
+        #                                                  )
+        #                                                 + "\n\n"
+        #                                                 + json_instructions
+        #                     )
+        
+        formatted_prompt = reflection_instructions.format(
+                                                        current_date=current_date,
+                                                        research_topic=get_research_topic(state["messages"]),
+                                                        summaries="\n\n---\n\n".join(state["web_research_result"]),
+                                                         )
+                                                       
+        result=self.model_2.get_generate_reflection_model(reasoning_model,formatted_prompt)
+       
+        # llm = ChatOllama(model="llama3", temperature=0.7)
+        # result = llm.invoke(formatted_prompt)
+        
+        # print("reflection ollama",json.loads(result.content))
+        # result1=json.loads(result.content)
+        
+        return {
+                "is_sufficient": result["is_sufficient"],
+                "knowledge_gap": result["knowledge_gap"],
+                "follow_up_queries": result["follow_up_queries"],
+                "research_loop_count": state["research_loop_count"],
+                "number_of_ran_queries": len(state["search_query"])
+               }
+
+    @traceable(name="evaluate_research")
+    def evaluate_research(self,state: ReflectionState,config: RunnableConfig,) -> OverallAgentsState_Web_Search:
+        configurable = Configuration.from_runnable_config(config)
+        max_research_loops = (
+                              state.get("max_research_loops")
+                              if state.get("max_research_loops") is not None
+                              else configurable.max_research_loops
+                             )
+        if state["is_sufficient"] or state["research_loop_count"] >= max_research_loops:
+            return "finalize_answer"
+        else:
+            return [
+                    Send(
+                        "web_research",
+                            {
+                            "search_query": follow_up_query,
+                            "id": state["number_of_ran_queries"] + int(idx),
+                            },
+                        )
+                    for idx, follow_up_query in enumerate(state["follow_up_queries"])
+                   ]
+
+    @traceable(name="finalize_answer")
+    def finalize_answer(self,state: OverallAgentsState_Web_Search, config: RunnableConfig):
+        configurable = Configuration.from_runnable_config(config)
+        reasoning_model = state.get("reasoning_model") or configurable.answer_model
+
+        current_date = get_current_date()
+        formatted_prompt = answer_instructions.format(
+                                                     current_date=current_date,
+                                                     research_topic=get_research_topic(state["messages"]),
+                                                     summaries="\n---\n\n".join(state["web_research_result"]),
+                                                     )
+        
+        # result=self.model_2.get_generate_answers_model(reasoning_model,formatted_prompt)
+        
+        llm = ChatOllama(model="llama3", temperature=0.7)
+        result = llm.invoke(formatted_prompt)
+        unique_sources = []
+        for source in state["sources_gathered"]:
+            if source["short_url"] in result.content:
+                result.content = result.content.replace(
+                                                        source["short_url"], source["value"]
+                                                        )
+                unique_sources.append(source)
+        print("unique state")
+        return {
+                "Web_Search_answer": result.content,
+                "sources_gathered": unique_sources,
+                "event":"Generating Answers..",
+                }
+
+
+

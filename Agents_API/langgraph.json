@@ -1,0 +1,13 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "agent_BNS": "./agents/BNS_Agent.py:_app_BNS",
+    "agent_BSA":"./agents/BSA_Agent.py:_app_BSA",
+    "agent_IT":"./agents/IT_Agent.py:_app_IT",
+    "agent_WS":"./agents/Web_Search_Agent.py:_app_Web_Search",
+    "agent_DPDP": "./agents/DPDP_Agent.py:_app_DPDP",
+    "agent_all": "./agents/All_Agents.py:_app"
+  },
+  "env": "../env"
+}
+
