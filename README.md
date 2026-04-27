@@ -152,6 +152,5 @@ Install the Chrome Extension located in the **Extension Folder** directly into y
 | 🧠 **Name** | 🎓 **Role** | 🏛️ **Affiliation** |
 |--------------|-------------|--------------------|
 | **Numan Adil Siddiqui** | M.Tech CSE | IIIT Delhi |
-| **Ravi Shekhar Tiwari** | PhD Scholar | IIIT Delhi |
 
 
